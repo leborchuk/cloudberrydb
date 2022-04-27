@@ -198,7 +198,25 @@ Relation
 CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 {
 	LOCKMODE    lockmode;
-	Relation    rel;
+
+	Relation    rel = InvalidRelation;
+
+	lockmode = UpgradeRelLockAndReuseRelIfNecessary(relid, &rel, reqmode);
+
+	if (lockUpgraded != NULL)
+	{
+		if (lockmode > reqmode)
+			*lockUpgraded = true;
+		else
+			*lockUpgraded = false;
+	}
+
+	/* use the table returned if possible, otherwise open it myself */
+	if (!RelationIsValid(rel))
+		rel = try_table_open(relid, lockmode, false);
+
+	if (!RelationIsValid(rel))
+		return NULL;
 
 	/*
 	 * This if-else statement will try to open the relation and
