@@ -2847,8 +2847,6 @@ gpdb::GPDBLockRelationOid(Oid reloid, LOCKMODE lockmode)
 {
 	GP_WRAP_START;
 	{
-		lockmode =
-			UpgradeRelLockAndReuseRelIfNecessary(reloid, nullptr, lockmode);
 		LockRelationOid(reloid, lockmode);
 	}
 	GP_WRAP_END;
