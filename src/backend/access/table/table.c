@@ -199,7 +199,7 @@ CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 {
 	LOCKMODE    lockmode;
 
-	Relation    rel = InvalidRelation;
+	Relation    rel;
 
 	/*
 	 * This if-else statement will try to open the relation and
@@ -209,12 +209,16 @@ CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 	 * only be possible when GUC allow_system_table_mods is set), the
 	 * update or delete does not hold locks on catalog on segments, so
 	 * we do not need to consider lock-upgrade for DML on catalogs.
+	 *
+	 * In singlenode mode, since local deadlock detection can already
+	 * detect and solve deadlocks, we act as if the global deadlock
+	 * detector is enabled.
 	 */
 	if (reqmode == RowExclusiveLock &&
-		Gp_role == GP_ROLE_DISPATCH &&
+		(Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) &&
 		relid >= FirstNormalObjectId)
 	{
-		if (!gp_enable_global_deadlock_detector)
+		if (!gp_enable_global_deadlock_detector && !IS_SINGLENODE())
 		{
 			/*
 			 * Without GDD, to avoid global deadlock, always
@@ -227,7 +231,9 @@ CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 		{
 			lockmode = RowExclusiveLock;
 			rel = try_table_open(relid, lockmode, false);
-			if (RelationIsAppendOptimized(rel))
+
+			if (RelationIsValid(rel) &&
+				RelationIsNonblockRelation(rel))
 			{
 				/*
 				 * AO|AOCO table does not support concurrently
@@ -243,20 +249,13 @@ CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 				rel = try_table_open(relid, lockmode, false);
 			}
 		}
-	}
-	else
-	{
-		lockmode = reqmode;
-		rel = try_table_open(relid, lockmode, false);
-	}
-	else
-	{
-		lockmode = reqmode;
-		rel = try_table_open(relid, lockmode, false);
-	}
 
-	if (lockUpgraded != NULL && lockmode > reqmode)
-		*lockUpgraded = true;
+	}
+	else
+	{
+		lockmode = reqmode;
+		rel = try_table_open(relid, lockmode, false);
+	}
 
 	if (lockUpgraded != NULL && lockmode > reqmode)
 		*lockUpgraded = true;

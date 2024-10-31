@@ -38,7 +38,6 @@
 #include "storage/proc.h"
 #include "utils/lsyscache.h"        /* CDB: get_rel_namespace() */
 
-
 /*
  * Per-backend counter for generating speculative insertion tokens.
  *

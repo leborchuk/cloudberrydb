@@ -1805,7 +1805,6 @@ SELECT a, (SELECT (SELECT d FROM qp_csq_t3 WHERE a=c)) FROM qp_csq_t1 GROUP BY a
 -- -- -- --
 select A.i, (select C.j from C group by C.j having max(C.j) = any (select min(B.j) from B)) as C_j from A,B,C where A.i = 99 order by A.i, C_j limit 10;
 INFO:  GPORCA failed to produce a plan, falling back to planner
-DETAIL:  DXL-to-PlStmt Translation: Assert not supported
  i  | c_j 
 ----+-----
  99 |   1
@@ -3725,7 +3724,6 @@ GPDB_12_MERGE_FIXME: Fallsback due to unsupported exec location.
 -- end_ignore
 EXPLAIN SELECT DISTINCT a FROM qp_tab1 WHERE NOT (SELECT TRUE FROM qp_tab2 WHERE EXISTS (SELECT * FROM qp_tab3 WHERE qp_tab2.c = qp_tab3.e));
 INFO:  GPORCA failed to produce a plan, falling back to planner
-DETAIL:  DXL-to-PlStmt Translation: Assert not supported
                                                              QUERY PLAN                                                             
 ------------------------------------------------------------------------------------------------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)  (cost=0.00..1765377.02 rows=1 width=4)
@@ -3754,7 +3752,6 @@ DETAIL:  DXL-to-PlStmt Translation: Assert not supported
 
 SELECT DISTINCT a FROM qp_tab1 WHERE NOT (SELECT TRUE FROM qp_tab2 WHERE EXISTS (SELECT * FROM qp_tab3 WHERE qp_tab2.c = qp_tab3.e));
 INFO:  GPORCA failed to produce a plan, falling back to planner
-DETAIL:  DXL-to-PlStmt Translation: Assert not supported
  a 
 ---
 (0 rows)
