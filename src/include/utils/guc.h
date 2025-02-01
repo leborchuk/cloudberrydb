@@ -559,6 +559,7 @@ extern bool optimizer_enable_derive_stats_all_groups;
 extern int optimizer_segments;
 extern int optimizer_penalize_broadcast_threshold;
 extern double optimizer_cost_threshold;
+extern int optimizer_relations_threshold;
 extern double optimizer_nestloop_factor;
 extern double optimizer_sort_factor;
 extern double optimizer_spilling_mem_threshold;

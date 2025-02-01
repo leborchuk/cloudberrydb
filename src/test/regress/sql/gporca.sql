@@ -3706,6 +3706,16 @@ INSERT INTO array_coerceviaio values(ARRAY[1, 2, 3]);
 EXPLAIN SELECT CAST(a AS TEXT[]) FROM array_coerceviaio;
 SELECT CAST(a AS TEXT[]) FROM array_coerceviaio;
 ---------------------------------------------------------------------------------
+-- Test do not use ORCA when optimizer_relations_threshold is set
+create table ort(a int);
+explain insert into ort values(1);
+set optimizer_relations_threshold = 1;
+explain insert into ort values(1);
+explain select * from ort a join ort b on a.a = b.a;
+set optimizer_relations_threshold = 2;
+explain select count(a.a) from ort a join ort b on a.a = b.a;
+explain select * from ort a join ort b on a.a = b.a;
+drop table ort;
 
 -- start_ignore
 DROP SCHEMA orca CASCADE;

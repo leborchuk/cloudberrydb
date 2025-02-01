@@ -380,6 +380,7 @@ bool		optimizer_enable_derive_stats_all_groups;
 int			optimizer_segments;
 int			optimizer_penalize_broadcast_threshold;
 double		optimizer_cost_threshold;
+int             optimizer_relations_threshold;
 double		optimizer_nestloop_factor;
 double		optimizer_sort_factor;
 double		optimizer_spilling_mem_threshold;
@@ -4362,6 +4363,17 @@ struct config_int ConfigureNamesInt_gp[] =
 		16384, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
+
+	{
+                {"optimizer_relations_threshold", PGC_USERSET, DEVELOPER_OPTIONS,
+                        gettext_noop("Minimal number of relations in a query to use gporca for planning, 0 means always try to use gporca"),
+                        NULL,
+                        GUC_NOT_IN_SAMPLE
+                },
+                &optimizer_relations_threshold,
+                0, 0, INT_MAX,
+                NULL, NULL, NULL
+        },
 
 	{
 		{"memory_profiler_dataset_size", PGC_USERSET, DEVELOPER_OPTIONS,

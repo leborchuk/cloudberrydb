@@ -183,6 +183,7 @@ static List *preprocess_groupclause(PlannerInfo *root, List *force);
 static List *extract_rollup_sets(List *groupingSets);
 static List *reorder_grouping_sets(List *groupingSets, List *sortclause);
 static void standard_qp_callback(PlannerInfo *root, void *extra);
+bool enabled_for_optimizer(Query *parse);
 static double get_number_of_groups(PlannerInfo *root,
 								   double path_rows,
 								   grouping_sets_data *gd,
@@ -342,6 +343,47 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 	return result;
 }
 
+/* Check if query too simple to use optimizer */
+bool enabled_for_optimizer(Query *parse)
+{
+	int num_relations = 0;
+	ListCell   *l;
+
+	if (optimizer_relations_threshold == 0)
+		return true;
+
+	if (parse->hasAggs || parse->hasWindowFuncs ||  parse->hasSubLinks || parse->hasRecursive || parse->hasDistinctOn || parse->cteList || parse->hasModifyingCTE)
+		return true;
+
+	foreach(l, parse->rtable)
+        {
+                RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
+
+                switch (rte->rtekind)
+                {
+                        case RTE_RELATION:
+				num_relations++;
+                                break;
+                        case RTE_JOIN:
+				// do not count joins 
+                                break;
+                        case RTE_RESULT:
+                                break;
+                        default:
+                                /* No work here for other RTE types */
+                                break;
+                }
+
+                if (rte->lateral)
+                        return true;
+
+		if (num_relations > optimizer_relations_threshold)
+			return true;
+	}
+	
+	return false;
+}
+
 PlannedStmt *
 standard_planner(Query *parse, const char *query_string, int cursorOptions,
 				 ParamListInfo boundParams)
@@ -373,11 +415,12 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 *
 	 * PARALLEL RETRIEVE CURSOR is not supported by ORCA yet.
 	 */
+	
 	if (optimizer &&
 		GP_ROLE_DISPATCH == Gp_role &&
 		IS_QUERY_DISPATCHER() &&
 		(cursorOptions & CURSOR_OPT_SKIP_FOREIGN_PARTITIONS) == 0 &&
-		(cursorOptions & CURSOR_OPT_PARALLEL_RETRIEVE) == 0)
+		(cursorOptions & CURSOR_OPT_PARALLEL_RETRIEVE) == 0 && enabled_for_optimizer(parse))
 	{
 
 #ifdef USE_ORCA
