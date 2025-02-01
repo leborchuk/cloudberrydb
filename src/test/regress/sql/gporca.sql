@@ -3609,6 +3609,18 @@ create table cte_test(a int);
 insert into cte_test select i from generate_series(1,10)i;
 analyze cte_test;
 explain (analyze, costs off, summary off, timing off) with cte as (select * from cte_test) select * from cte union all select * from cte;
+
+-- Test do not use ORCA when optimizer_relations_threshold is set
+create table ort(a int);
+explain insert into ort values(1);
+set optimizer_relations_threshold = 1;
+explain insert into ort values(1);
+explain select * from ort a join ort b on a.a = b.a;
+set optimizer_relations_threshold = 2;
+explain select count(a.a) from ort a join ort b on a.a = b.a;
+explain select * from ort a join ort b on a.a = b.a;
+drop table ort;
+
 -- start_ignore
 DROP SCHEMA orca CASCADE;
 -- end_ignore
