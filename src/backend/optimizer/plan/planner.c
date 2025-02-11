@@ -352,7 +352,7 @@ bool enabled_for_optimizer(Query *parse)
 	if (optimizer_relations_threshold == 0)
 		return true;
 
-	if (parse->hasAggs || parse->hasWindowFuncs || parse->hasTargetSRFs || parse->hasSubLinks || parse->hasRecursive || parse->cteList)
+	if (parse->hasAggs || parse->hasWindowFuncs ||  parse->hasSubLinks || parse->hasRecursive || parse->hasDistinctOn || parse->cteList)
 		return true;
 
 	foreach(l, parse->rtable)
