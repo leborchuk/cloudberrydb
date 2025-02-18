@@ -364,7 +364,7 @@ jobs:
   ## ======================================================================
 
   build:
-    name: Build Apache Cloudberry
+    name: Build Apache Cloudberry RPM
     env:
       JOB_TYPE: build
     needs: [check-skip]
