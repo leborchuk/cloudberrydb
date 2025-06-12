@@ -150,7 +150,6 @@ jobs:
     name: Build Apache Cloudberry DEB
     env:
       JOB_TYPE: build
-    needs: [check-skip]
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     outputs:
@@ -164,7 +163,6 @@ jobs:
 
     steps:
       - name: Set build timestamp
-        if: needs.check-skip.outputs.should_skip != 'true'
         id: set_timestamp  # Add an ID to reference this step
         run: |
           timestamp=$(date +'%Y%m%d_%H%M%S')
@@ -172,14 +170,12 @@ jobs:
           echo "BUILD_TIMESTAMP=$timestamp" | tee -a "$GITHUB_ENV" # Also set as environment variable
 
       - name: Checkout Apache Cloudberry
-        if: needs.check-skip.outputs.should_skip != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           submodules: true
 
       - name: Checkout CI Build/Test Scripts
-        if: needs.check-skip.outputs.should_skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: apache/cloudberry-devops-release
@@ -188,7 +184,6 @@ jobs:
           fetch-depth: 1
 
       - name: Move cloudberry-devops-release directory
-        if: needs.check-skip.outputs.should_skip != 'true'
         run: |
           set -eo pipefail
           if ! mv "${GITHUB_WORKSPACE}"/cloudberry-devops-release "${GITHUB_WORKSPACE}"/..; then
@@ -197,7 +192,6 @@ jobs:
           fi
 
       - name: Cloudberry Environment Initialization
-        if: needs.check-skip.outputs.should_skip != 'true'
         env:
           LOGS_DIR: build-logs
         run: |
@@ -241,7 +235,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run Apache Cloudberry configure script
-        if: needs.check-skip.outputs.should_skip != 'true'
         env:
           SRC_DIR: ${{ github.workspace }}
         run: |
@@ -256,7 +249,6 @@ jobs:
           fi
 
       - name: Run Apache Cloudberry build script
-        if: needs.check-skip.outputs.should_skip != 'true'
         env:
           SRC_DIR: ${{ github.workspace }}
         run: |
@@ -282,7 +274,6 @@ jobs:
           fi
 
       - name: Verify build artifacts
-        if: needs.check-skip.outputs.should_skip != 'true'
         run: |
           set -eo pipefail
 
