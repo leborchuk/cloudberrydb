@@ -184,6 +184,7 @@ jobs:
           fetch-depth: 1
 
       - name: Move cloudberry-devops-release directory
+        shell: bash
         run: |
           set -eo pipefail
           if ! mv "${GITHUB_WORKSPACE}"/cloudberry-devops-release "${GITHUB_WORKSPACE}"/..; then
@@ -192,6 +193,7 @@ jobs:
           fi
 
       - name: Cloudberry Environment Initialization
+        shell: bash
         env:
           LOGS_DIR: build-logs
         run: |
@@ -235,6 +237,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run Apache Cloudberry configure script
+        shell: bash
         env:
           SRC_DIR: ${{ github.workspace }}
         run: |
@@ -249,6 +252,7 @@ jobs:
           fi
 
       - name: Run Apache Cloudberry build script
+        shell: bash
         env:
           SRC_DIR: ${{ github.workspace }}
         run: |
@@ -274,6 +278,7 @@ jobs:
           fi
 
       - name: Verify build artifacts
+        shell: bash
         run: |
           set -eo pipefail
 
@@ -326,6 +331,7 @@ jobs:
           } 2>&1 | tee -a build-logs/details/build-verification.log
 
       - name: Create Source tarball, create DEB and verify artifacts
+        shell: bash
         env:
           CBDB_VERSION: 99.0.0
           BUILD_NUMBER: 1
