@@ -266,16 +266,11 @@ jobs:
             exit 1
           fi
 
-          # copy sugar and xerces shared libraries
+          # copy sugar shared libraries
           if ! cp /usr/local/lib/libsigar.so ${BUILD_DESTINATION}/lib; then
             echo "::error::Copy libsigar.so failed"
             exit 1
           fi 
-
-          if ! cp /usr/local/lib/libxerces* ${BUILD_DESTINATION}/lib; then
-            echo "::error::Copy libxerces failed"
-            exit 1
-          fi
 
       - name: Verify build artifacts
         shell: bash
