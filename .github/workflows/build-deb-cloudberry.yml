@@ -266,12 +266,6 @@ jobs:
             exit 1
           fi
 
-          # copy sugar shared libraries
-          if ! cp /usr/local/lib/libsigar.so ${BUILD_DESTINATION}/lib; then
-            echo "::error::Copy libsigar.so failed"
-            exit 1
-          fi 
-
       - name: Verify build artifacts
         shell: bash
         run: |
