@@ -178,7 +178,7 @@ jobs:
       - name: Checkout CI Build/Test Scripts
         uses: actions/checkout@v4
         with:
-          repository: apache/cloudberry-devops-release
+          repository: leborchuk/cloudberry-devops-release
           ref: main
           path: cloudberry-devops-release
           fetch-depth: 1
