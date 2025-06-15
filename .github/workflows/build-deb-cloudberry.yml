@@ -374,13 +374,13 @@ jobs:
 
           # Get package information
           echo "Package Information:"
-          dpkg --info "${DEB_FILE}"
-          dpkg --contents "${DEB_FILE}"
+          dpkg --info "${SRC_DIR}/deb/${DEB_FILE}"
+          dpkg --contents "${SRC_DIR}/deb/${DEB_FILE}"
 
           # Verify critical files in DEB
           echo "Verifying critical files in DEB..."
           for binary in "bin/postgres" "bin/psql"; do
-            if ! dpkg --contents "${DEB_FILE}" | grep -q "${binary}$"; then
+            if ! dpkg --contents "${SRC_DIR}/deb/${DEB_FILE}" | grep -q "${binary}$"; then
               echo "::error::Critical binary '${binary}' not found in DEB"
               exit 1
             fi
@@ -388,7 +388,7 @@ jobs:
 
           # Record checksums
           echo "Calculating checksums..."
-          sha256sum "${DEB_FILE}" | tee -a build-logs/details/checksums.log
+          sha256sum "${SRC_DIR}/deb/${DEB_FILE}" | tee -a build-logs/details/checksums.log
 
           echo "Artifacts created and verified successfully"
 
