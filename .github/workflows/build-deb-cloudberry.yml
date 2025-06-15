@@ -380,7 +380,7 @@ jobs:
           # Verify critical files in DEB
           echo "Verifying critical files in DEB..."
           for binary in "bin/postgres" "bin/psql"; do
-            if ! dpkg --contents "${SRC_DIR}/deb/${DEB_FILE}" | grep -q "${binary}$"; then
+            if ! dpkg --contents "${SRC_DIR}/deb/${DEB_FILE}" | grep -c "${binary}$"; then
               echo "::error::Critical binary '${binary}' not found in DEB"
               exit 1
             fi
