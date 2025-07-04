@@ -2619,14 +2619,14 @@ def impl(context, location):
     directory location for all hosts in the cluster.
     """
     gphome = os.environ["GPHOME"]
-    cloudberry_path = path.join(gphome, 'cloudberry-env.sh')
+    cloudberry_env = path.join(gphome, 'cloudberry-env.sh')
 
     # First replace the GPHOME envvar in cloudberry-env.sh.
     subprocess.check_call([
         'sed',
         '-i.bak', # we use this backup later
         '-e', r's|^GPHOME=.*$|GPHOME={}|'.format(location),
-        cloudberry_path,
+        cloudberry_env,
     ])
 
     try:
@@ -2648,7 +2648,7 @@ def impl(context, location):
     finally:
         # Put cloudberry-env.sh back the way it was.
         subprocess.check_call([
-            'mv', '{}.bak'.format(cloudberry_path), cloudberry_path
+            'mv', '{}.bak'.format(cloudberry_env), cloudberry_env
         ])
 
 @given('all files in gpAdminLogs directory are deleted')

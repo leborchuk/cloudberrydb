@@ -232,7 +232,7 @@ endef
 ifeq "$(BLD_GPDB_BUILDSET)" "partial"
 define BUILD_STEPS
 	rm -rf $(INSTLOC)
-	cd $(BUILDDIR)/gpMgmt/ && $(MAKE) generate_cloudberry_path_file
+	cd $(BUILDDIR)/gpMgmt/ && $(MAKE) generate_cloudberry_env_file
 	cd $(BUILDDIR)/src/backend/ && $(MAKE) ../../src/include/parser/gram.h
 	cd $(BUILDDIR)/src/backend/ && $(MAKE) ../../src/include/utils/errcodes.h
 	cd $(BUILDDIR)/src/backend/ && $(MAKE) ../../src/include/utils/fmgroids.h

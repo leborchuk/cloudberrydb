@@ -6,13 +6,12 @@ SUBDIRS= sbin bin doc
 
 $(recurse)
 
-generate_cloudberry_path_file:
+generate_cloudberry_env_file:
 	mkdir -p $(DESTDIR)$(prefix)
 	unset LIBPATH; \
 	bin/generate-cloudberry-env.sh > $(DESTDIR)$(prefix)/cloudberry-env.sh
-	cp $(DESTDIR)$(prefix)/cloudberry-env.sh $(DESTDIR)$(prefix)/greenplum_path.sh
 
-install: generate_cloudberry_path_file
+install: generate_cloudberry_env_file
 	mkdir -p $(DESTDIR)$(prefix)/lib/python
 
 	# Setup /lib/python contents
