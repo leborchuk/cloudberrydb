@@ -38,6 +38,15 @@ DATA = test_anser--1.0.sql
 
 REGRESS = test_anser anser_runtime_filter
 
+# CI runs a single make target per test config, and pg_regress can only CREATE
+# EXTENSION test_anser once the module is installed (src/test/modules is not
+# covered by the top-level install).  One-shot target so the CI matrix needs
+# only one entry whose log still contains the regression results.
+.PHONY: installcheck-with-install
+installcheck-with-install:
+	$(MAKE) install
+	$(MAKE) installcheck
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
