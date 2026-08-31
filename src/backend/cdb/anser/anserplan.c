@@ -37,6 +37,7 @@
 #include "cdb/anser.h"
 #include "cdb/anserplan.h"
 #include "cdb/cdbvars.h"
+#include "catalog/pg_type.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "utils/acl.h"
