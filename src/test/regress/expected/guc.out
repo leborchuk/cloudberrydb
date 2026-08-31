@@ -920,6 +920,7 @@ SELECT name FROM tab_settings_flags
 ------------------------------------------------------
  enable_groupagg
  gp_adjust_selectivity_for_outerjoins
+ gp_anser_runtime_filter
  gp_cte_sharing
  gp_dynamic_partition_pruning
  gp_enable_agg_distinct
@@ -962,7 +963,7 @@ SELECT name FROM tab_settings_flags
  optimizer_penalize_broadcast_threshold
  optimizer_push_group_by_below_setop_threshold
  optimizer_sort_factor
-(44 rows)
+(45 rows)
 
 -- Runtime-computed GUCs should be part of the preset category.
 SELECT name FROM tab_settings_flags
