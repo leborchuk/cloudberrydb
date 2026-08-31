@@ -165,6 +165,7 @@
 		"gp_anser_max_channels",
 		"gp_anser_max_consumers_per_channel",
 		"gp_anser_max_info_size",
+		"gp_anser_runtime_filter",
 		"gp_anser_timeout_ms",
 		"gp_auth_time_override",
 		"gp_autostats_allow_nonowner",
