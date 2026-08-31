@@ -37,6 +37,7 @@
  */
 #include "postgres.h"
 
+#include "access/skey.h"
 #include "cdb/anser.h"
 #include "cdb/anserfilter.h"
 #include "cdb/anserplan.h"
@@ -51,6 +52,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "nodes/value.h"
+#include "utils/guc.h"
 
 /*
  * Positional layout of CustomScan.custom_private shared with anserplan.c.
@@ -99,6 +101,9 @@ typedef struct AnserBloomConsumeScanState
 	int64		planned_bytes;
 	char	   *token;		/* QD session token, NULL when none */
 	bool		received;		/* have we run the receive/union yet? */
+	bool		pushed_down;	/* filter handed to the child scan as an
+								 * SK_BLOOM_FILTER scan key (the scan filters,
+								 * we pass through) */
 } AnserBloomConsumeScanState;
 
 /* Provider callbacks. */
@@ -461,6 +466,7 @@ anser_consume_begin(CustomScanState *node, EState *estate, int eflags)
 	st->token = anser_rf_token(cscan);
 	st->filter = NULL;
 	st->received = false;
+	st->pushed_down = false;
 
 	anser_rf_build_key(cscan, &key);
 	anser_rf_part_info(&part_index, &expected_parts);
@@ -503,6 +509,41 @@ anser_consume_receive(AnserBloomConsumeScanState *st)
 			 ExecAnserBloomFilterConsumerReceivedParts(st->consume));
 }
 
+/*
+ * Hand the received filter to the child SeqScan as an SK_BLOOM_FILTER scan
+ * key -- the exact structure PassByBloomFilter consumes (nodeSeqscan.c), so
+ * the scan does the pruning itself and a table AM that supports
+ * SCAN_SUPPORT_RUNTIME_FILTER may additionally use the key for block-level
+ * pruning.  Runs before the child's first ExecProcNode, so the key is in
+ * node->filters when the scan descriptor is created.  The filter stays owned
+ * by us; anser_consume_end ends the child before freeing it.
+ */
+static void
+anser_consume_pushdown(CustomScanState *node)
+{
+	AnserBloomConsumeScanState *st = (AnserBloomConsumeScanState *) node;
+	PlanState  *child = (PlanState *) linitial(node->custom_ps);
+	SeqScanState *sss;
+	ScanKey		sk;
+	MemoryContext oldcxt;
+
+	if (!gp_enable_runtime_filter_pushdown || !IsA(child, SeqScanState))
+		return;
+	sss = (SeqScanState *) child;
+	if (!sss->filter_in_seqscan)
+		return;
+
+	oldcxt = MemoryContextSwitchTo(node->ss.ps.state->es_query_cxt);
+	sk = (ScanKey) palloc0(sizeof(ScanKeyData));
+	sk->sk_attno = st->key_attno;
+	sk->sk_flags = SK_BLOOM_FILTER;
+	sk->sk_argument = PointerGetDatum(st->filter);
+	sss->filters = lappend(sss->filters, sk);
+	MemoryContextSwitchTo(oldcxt);
+
+	st->pushed_down = true;
+}
+
 static TupleTableSlot *
 anser_consume_next(CustomScanState *node)
 {
@@ -510,6 +551,13 @@ anser_consume_next(CustomScanState *node)
 	PlanState  *child = (PlanState *) linitial(node->custom_ps);
 
 	anser_consume_receive(st);
+
+	/*
+	 * When the pushdown machinery is enabled, hand the filter to the scan and
+	 * pass tuples through untouched; otherwise probe the filter here.
+	 */
+	if (st->filter != NULL && !st->pushed_down)
+		anser_consume_pushdown(node);
 
 	for (;;)
 	{
@@ -520,8 +568,11 @@ anser_consume_next(CustomScanState *node)
 		if (TupIsNull(slot))
 			return NULL;
 
-		/* Fail open: no usable filter -> pass everything. */
-		if (st->filter == NULL)
+		/*
+		 * Fail open (no usable filter) or pushed down (the scan filters via
+		 * PassByBloomFilter): pass everything.
+		 */
+		if (st->filter == NULL || st->pushed_down)
 			return anser_rf_child_slot(node, slot);
 
 		value = slot_getattr(slot, st->key_attno, &isnull);
@@ -562,12 +613,16 @@ anser_consume_end(CustomScanState *node)
 {
 	AnserBloomConsumeScanState *st = (AnserBloomConsumeScanState *) node;
 
+	/*
+	 * End the child first: when the filter was pushed down, the child's scan
+	 * key references it, so the filter must outlive the child node.
+	 */
+	if (node->custom_ps != NIL)
+		ExecEndNode((PlanState *) linitial(node->custom_ps));
 	if (st->consume != NULL)
 		ExecEndAnserBloomFilterConsume(st->consume);
 	st->consume = NULL;
 	st->filter = NULL;
-	if (node->custom_ps != NIL)
-		ExecEndNode((PlanState *) linitial(node->custom_ps));
 }
 
 static void
@@ -598,13 +653,21 @@ anser_consume_explain(CustomScanState *node, List *ancestors, ExplainState *es)
 		 * these are the winning segment's values (max ntuples/nloops), not a
 		 * cluster-wide sum.  memory is planned_bytes: the unioned filter's
 		 * size is identical on every segment by construction (anser_rf_size).
+		 * When the filter was pushed into the child scan, pruning happens
+		 * there instead (its "Rows Removed by Pushdown Runtime Filter" line),
+		 * so our counters stay zero.
 		 */
-		snprintf(buf, sizeof(buf),
-				 "memory=" INT64_FORMAT "kB checked=%.0f rejected=%.0f",
-				 st->planned_bytes / 1024, nchecked, nfiltered);
+		if (st->pushed_down)
+			snprintf(buf, sizeof(buf),
+					 "memory=" INT64_FORMAT "kB (pushed down to Seq Scan)",
+					 st->planned_bytes / 1024);
+		else
+			snprintf(buf, sizeof(buf),
+					 "memory=" INT64_FORMAT "kB checked=%.0f rejected=%.0f",
+					 st->planned_bytes / 1024, nchecked, nfiltered);
 		ExplainPropertyText("Bloom Filter Stats", buf, es);
 
-		if (nloops > 0)
+		if (!st->pushed_down && nloops > 0)
 			ExplainPropertyFloat("Rows Removed by Bloom Filter", NULL,
 								 nfiltered / nloops, 0, es);
 	}

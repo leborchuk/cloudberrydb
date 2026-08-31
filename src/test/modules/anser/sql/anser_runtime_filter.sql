@@ -61,8 +61,80 @@ SELECT count(*) AS only_orca
 SELECT count(*) AS only_off_orca
     FROM (SELECT * FROM anser_rf_r_off EXCEPT ALL SELECT * FROM anser_rf_r_orca) d;
 
+-- Pushdown mix: with gp_enable_runtime_filter_pushdown on, the consumer hands
+-- the unioned filter to the probe SeqScan as an SK_BLOOM_FILTER scan key and
+-- the scan (or the table AM) does the pruning.  Results must still match the
+-- filter-off run.
+SET optimizer = off;
+SET gp_enable_runtime_filter_pushdown = on;
+SET gp_anser_runtime_filter = on;
+CREATE TEMP TABLE anser_rf_r_push AS
+    SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.id = p.id
+    DISTRIBUTED BY (name);
+SELECT count(*) AS only_push
+    FROM (SELECT * FROM anser_rf_r_push EXCEPT ALL SELECT * FROM anser_rf_r_off) d;
+SELECT count(*) AS only_off_push
+    FROM (SELECT * FROM anser_rf_r_off EXCEPT ALL SELECT * FROM anser_rf_r_push) d;
+RESET gp_enable_runtime_filter_pushdown;
+
+DROP TABLE anser_rf_r_push;
 DROP TABLE anser_rf_r_on, anser_rf_r_off, anser_rf_r_orca;
 DROP TABLE anser_rf_build, anser_rf_probe;
+
+-- Datatype guard: producer and consumer hash the raw Datum bytes, so injection
+-- is restricted to keys where SQL equality is bitwise Datum equality.  A
+-- cross-type join (float4 vs float8 Datums for equal values differ) must not
+-- be injected; results must match the filter-off run either way.
+CREATE TABLE anser_rf_build_f (id float8, name text) DISTRIBUTED BY (name);
+CREATE TABLE anser_rf_probe_f (id float4, payload text) DISTRIBUTED BY (id);
+INSERT INTO anser_rf_build_f SELECT g, 'b' || g FROM generate_series(1, 200) g;
+INSERT INTO anser_rf_probe_f SELECT g, 'p' || g FROM generate_series(1, 2000) g;
+ANALYZE anser_rf_build_f;
+ANALYZE anser_rf_probe_f;
+
+SET gp_anser_runtime_filter = on;
+CREATE TEMP TABLE anser_rf_f_on AS
+    SELECT b.name, p.payload FROM anser_rf_build_f b JOIN anser_rf_probe_f p ON b.id = p.id
+    DISTRIBUTED BY (name);
+SET gp_anser_runtime_filter = off;
+CREATE TEMP TABLE anser_rf_f_off AS
+    SELECT b.name, p.payload FROM anser_rf_build_f b JOIN anser_rf_probe_f p ON b.id = p.id
+    DISTRIBUTED BY (name);
+
+SELECT count(*) AS rows_on FROM anser_rf_f_on;
+SELECT count(*) AS only_on
+    FROM (SELECT * FROM anser_rf_f_on EXCEPT ALL SELECT * FROM anser_rf_f_off) d;
+SELECT count(*) AS only_off
+    FROM (SELECT * FROM anser_rf_f_off EXCEPT ALL SELECT * FROM anser_rf_f_on) d;
+
+DROP TABLE anser_rf_f_on, anser_rf_f_off, anser_rf_build_f, anser_rf_probe_f;
+
+-- Same-typed float keys are also excluded: -0.0 and 0.0 compare equal in SQL
+-- but are not bitwise equal, so hashing raw Datums could prune a joinable row.
+CREATE TABLE anser_rf_build_z (id float8, name text) DISTRIBUTED BY (name);
+CREATE TABLE anser_rf_probe_z (id float8, payload text) DISTRIBUTED BY (id);
+INSERT INTO anser_rf_build_z VALUES (1, 'b1'), (-0.0, 'bz');
+INSERT INTO anser_rf_probe_z VALUES (1, 'p1'), (0.0, 'pz'), (2, 'p2');
+ANALYZE anser_rf_build_z;
+ANALYZE anser_rf_probe_z;
+
+SET gp_anser_runtime_filter = on;
+CREATE TEMP TABLE anser_rf_z_on AS
+    SELECT b.name, p.payload FROM anser_rf_build_z b JOIN anser_rf_probe_z p ON b.id = p.id
+    DISTRIBUTED BY (name);
+SET gp_anser_runtime_filter = off;
+CREATE TEMP TABLE anser_rf_z_off AS
+    SELECT b.name, p.payload FROM anser_rf_build_z b JOIN anser_rf_probe_z p ON b.id = p.id
+    DISTRIBUTED BY (name);
+
+SELECT count(*) AS rows_on FROM anser_rf_z_on;
+SELECT count(*) AS only_on
+    FROM (SELECT * FROM anser_rf_z_on EXCEPT ALL SELECT * FROM anser_rf_z_off) d;
+SELECT count(*) AS only_off
+    FROM (SELECT * FROM anser_rf_z_off EXCEPT ALL SELECT * FROM anser_rf_z_on) d;
+
+DROP TABLE anser_rf_z_on, anser_rf_z_off, anser_rf_build_z, anser_rf_probe_z;
+
 RESET gp_anser_runtime_filter;
 RESET optimizer;
 RESET enable_nestloop;

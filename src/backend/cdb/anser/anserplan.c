@@ -40,6 +40,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "utils/acl.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 
 /* Runtime-filter bloom size bounds (realized bitset bytes). */
@@ -244,11 +245,19 @@ anser_hashjoin_keys(HashJoin *hj, AttrNumber *inner_attno, AttrNumber *outer_att
 		return false;
 
 	/*
-	 * Producer and consumer hash the raw Datum bytes, which is only meaningful
-	 * for a pass-by-value key type (the value lives in the Datum, not behind a
-	 * pointer).  Restrict to those.
+	 * Producer and consumer hash the raw Datum bytes, which is only correct
+	 * when SQL equality coincides with bitwise Datum equality of the key.
+	 * That requires the SAME by-value type on both sides: cross-type equijoins
+	 * (e.g. float4 = float8, date = timestamp) hash different bit patterns for
+	 * equal values, and floats are excluded even same-typed because -0.0 and
+	 * 0.0 compare equal but are not bitwise equal.  Anything looser could
+	 * prune rows that actually join.
 	 */
+	if (inner_var->vartype != outer_var->vartype)
+		return false;
 	if (!get_typbyval(inner_var->vartype))
+		return false;
+	if (inner_var->vartype == FLOAT4OID || inner_var->vartype == FLOAT8OID)
 		return false;
 
 	*inner_attno = inner_var->varattno;
