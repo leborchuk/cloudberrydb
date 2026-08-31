@@ -908,6 +908,8 @@ anser_test_dsm_free_on_success(PG_FUNCTION_ARGS)
 	}
 	PG_FINALLY();
 	{
+		/* sweep_enabled is shared postmaster-wide state: always restore it. */
+		AnserSetSweepEnabled(true);
 		for (i = 0; i < nseg; i++)
 			if (cons[i] != NULL)
 				PQfinish(cons[i]);
@@ -973,9 +975,9 @@ anser_test_dsm_free_on_timeout(PG_FUNCTION_ARGS)
 	{
 		SetConfigOption("gp_anser_timeout_ms", saved_timeout,
 						PGC_USERSET, PGC_S_SESSION);
+		/* sweep_enabled is shared postmaster-wide state: always restore it. */
 		AnserSetSweepEnabled(true);
 		AnserServiceMaintenance();	/* reclaim the cancelled entry */
-		AnserSetSweepEnabled(false);
 	}
 	PG_END_TRY();
 
@@ -1068,6 +1070,8 @@ anser_test_dsm_free_on_cancel(PG_FUNCTION_ARGS)
 	}
 	PG_FINALLY();
 	{
+		/* sweep_enabled is shared postmaster-wide state: always restore it. */
+		AnserSetSweepEnabled(true);
 		for (i = 0; i < nseg; i++)
 			if (cons[i] != NULL)
 				PQfinish(cons[i]);

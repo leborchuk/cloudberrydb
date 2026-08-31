@@ -244,7 +244,8 @@ jobs:
                "pg_settings":{"optimizer":"on"}
               },
               {"test":"ic-anser",
-               "make_configs":["src/test/modules/anser:installcheck"],
+               "make_configs":["src/test/modules/anser:install",
+                               "src/test/modules/anser:installcheck"],
                "postgres_conf_addons":"gp_anser_enable=on"
               },
               {"test":"pax-ic-good-opt-off",
