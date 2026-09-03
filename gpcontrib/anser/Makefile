@@ -37,14 +37,21 @@ OBJS = \
 	src/anserinit.o \
 	src/anserplan.o \
 	src/anserplanexec.o \
-	src/anserservice.o
+	src/anserservice.o \
+	src/anser_test.o
 
 PGFILEDESC = "anser - adaptive information sharing runtime filters"
 
-EXTENSION = anser
-DATA = anser--1.0.sql
+# anser_test exposes the internal C API to the regression tests; its functions
+# live in the same library, so it is a second control file over $libdir/anser
+# rather than a separate module.
+EXTENSION = anser anser_test
+DATA = anser--1.0.sql anser_test--1.0.sql
 
-# src/anserclient.c opens libpq connections back to the coordinator.
+REGRESS = anser_test anser_runtime_filter
+
+# src/anserclient.c opens libpq connections back to the coordinator, and
+# src/anser_test.c drives loopback connections of its own.
 PG_CPPFLAGS = -I$(srcdir)/include -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 SHLIB_PREREQS = submake-libpq
@@ -59,3 +66,36 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+# The tests need the live gather/send services, which only exist when the
+# library is preloaded and anser.enable is on -- both postmaster-context
+# settings.  Ensure them (and restart) before installcheck, as
+# gp_relsizes_stats does for its worker.
+installcheck: preload-anser
+
+.PHONY: preload-anser
+preload-anser:
+	@if [ -z "$$COORDINATOR_DATA_DIRECTORY$$MASTER_DATA_DIRECTORY" ]; then \
+	    echo "ERROR: COORDINATOR_DATA_DIRECTORY (or MASTER_DATA_DIRECTORY) is not set;" >&2; \
+	    echo "       source cloudberry-env.sh and gpdemo-env.sh before running installcheck." >&2; \
+	    exit 1; \
+	fi
+	@current=`psql -d postgres -At -c "SHOW shared_preload_libraries;" | tr -d ' '`; \
+	case ",$$current," in \
+	  *,anser,*) \
+	    echo "==> shared_preload_libraries already contains anser" ;; \
+	  *) \
+	    if [ -z "$$current" ]; then new=anser; else new="$$current,anser"; fi; \
+	    echo "==> Adding anser to shared_preload_libraries ($$new)"; \
+	    gpconfig -c shared_preload_libraries -v "'$$new'" --skipvalidation ;; \
+	esac
+	gpconfig -c anser.enable -v on --skipvalidation
+	gpstop -ra
+	psql -d postgres -c "SHOW shared_preload_libraries;"
+
+# CI runs a single make target per test config, so offer one target that
+# installs the extension, arms the cluster, and runs the tests.
+.PHONY: installcheck-with-install
+installcheck-with-install:
+	$(MAKE) install
+	$(MAKE) installcheck
