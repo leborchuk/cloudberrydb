@@ -257,6 +257,13 @@ static int	PerformRadiusTransaction(const char *server, const char *secret, cons
 ClientAuthentication_hook_type ClientAuthentication_hook = NULL;
 
 /*
+ * These hooks let an extension authenticate its own internal connections
+ * before pg_hba.conf is consulted; see custom_conn_authentication() below.
+ */
+CustomAuthClaims_hook_type CustomAuthClaims_hook = NULL;
+CustomAuthCheckPassword_hook_type CustomAuthCheckPassword_hook = NULL;
+
+/*
  * Tell the user the authentication failed, but not (much about) why.
  *
  * There is a tradeoff here between security concerns and making life
@@ -560,6 +567,33 @@ retrieve_conn_authentication(Port *port)
 }
 
 /*
+ * A connection claimed by an extension via CustomAuthClaims_hook uses the
+ * password it sends as an extension-defined credential, bypassing pg_hba --
+ * the same model as retrieve_conn_authentication() above.  Only the check is
+ * delegated: the extension decides whether the credential entitles the client
+ * to connect as port->user_name, and on success the connection becomes an
+ * ordinary backend for that user.
+ */
+static void
+custom_conn_authentication(Port *port)
+{
+	char	   *passwd;
+	const char *msg1 = "Failed to retrieve the authentication password";
+	const char *msg2 = "Authentication failure (invalid credential)";
+
+	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
+	passwd = recv_password_packet(port);
+	if (passwd == NULL)
+		ereport(FATAL, (errcode(ERRCODE_INVALID_PASSWORD), errmsg("%s", msg1)));
+
+	if (CustomAuthCheckPassword_hook == NULL ||
+		!CustomAuthCheckPassword_hook(port, passwd))
+		ereport(FATAL, (errcode(ERRCODE_INVALID_PASSWORD), errmsg("%s", msg2)));
+
+	FakeClientAuthentication(port);
+}
+
+/*
  * Special client authentication for QD to QE connections. This is run at the
  * QE. This is non-trivial because a QE some times runs at the master (i.e., an
  * entry-DB for things like master only tables).
@@ -715,6 +749,17 @@ ClientAuthentication(Port *port)
 	{
 		retrieve_conn_authentication(port);
 		retrieve_conn_authenticated = true;
+		return;
+	}
+
+	/*
+	 * An extension may own the authentication of its own internal connections
+	 * (identified by a marker option in the startup packet), likewise before
+	 * pg_hba is consulted.
+	 */
+	if (CustomAuthClaims_hook != NULL && CustomAuthClaims_hook(port))
+	{
+		custom_conn_authentication(port);
 		return;
 	}
 

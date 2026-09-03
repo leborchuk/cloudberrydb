@@ -31,6 +31,22 @@ typedef void (*ClientAuthentication_hook_type) (Port *, int);
 extern PGDLLIMPORT ClientAuthentication_hook_type ClientAuthentication_hook;
 
 /*
+ * Hooks for an extension that maintains its own internal connections, such as
+ * a segment -> coordinator connection carrying a per-session token.  The claims
+ * hook is consulted before pg_hba.conf and answers whether this connection
+ * belongs to the extension, normally by looking for a marker option in
+ * port->cmdline_options / port->guc_options.  When it claims the connection,
+ * the backend asks the client for a password and hands it to the check hook,
+ * which returns true if the connection may proceed as port->user_name.  The
+ * wire exchange stays in auth.c; the extension only supplies the two answers.
+ */
+typedef bool (*CustomAuthClaims_hook_type) (Port *port);
+extern PGDLLIMPORT CustomAuthClaims_hook_type CustomAuthClaims_hook;
+typedef bool (*CustomAuthCheckPassword_hook_type) (Port *port,
+												   const char *passwd);
+extern PGDLLIMPORT CustomAuthCheckPassword_hook_type CustomAuthCheckPassword_hook;
+
+/*
  * Support for time-based authentication
  *  
  * Used by auth.c for comparing current time to the contents of 
