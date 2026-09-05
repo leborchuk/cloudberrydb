@@ -44,7 +44,6 @@ typedef struct AnserBloomFilterConsumeState AnserBloomFilterConsumeState;
 /* Producer side: build one Bloom filter part and publish it to the channel. */
 
 /*
- * `token` is the QD session token used to authenticate the segment -> QD
  * libpq connection (parallel-retrieve-cursor model); NULL means connect
  * without it and rely on pg_hba.  Ignored on the coordinator-local path.
  */
@@ -53,8 +52,7 @@ extern AnserBloomFilterProduceState *ExecInitAnserBloomFilterProduce(
 										int64 total_elems,
 										Size max_payload_bytes,
 										uint32 part_index,
-										uint32 total_parts,
-										const char *token);
+										uint32 total_parts);
 extern void ExecAnserBloomFilterProduceAddDatum(AnserBloomFilterProduceState *state,
 										 Datum value, bool isnull);
 extern bool ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state);
@@ -66,8 +64,7 @@ extern AnserBloomFilterConsumeState *ExecInitAnserBloomFilterConsume(
 										const AnserChannelKey *channel_key,
 										int64 total_elems,
 										Size max_payload_bytes,
-										uint32 expected_parts,
-										const char *token);
+										uint32 expected_parts);
 extern bool ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 									long registration_timeout_ms);
 extern bloom_filter *ExecAnserBloomFilterConsumerGetFilter(

@@ -29,22 +29,20 @@
 
 #include "anser.h"
 #include "anserbloom.h"
-#include "anserclient.h"
 #include "anserfilter.h"
+#include "ansersideband.h"
 #include "cdb/cdbvars.h"
 
 /*
  * State for one Bloom filter consumer.  Consumes the merged payload for a
  * channel exactly once (consumed), either from the coordinator's shared
- * memory channel map or over libpq.  token authenticates the libpq
- * transport on segments and is NULL on the coordinator.  cancelled records
- * that the producer side aborted instead of delivering the payload.
+ * coordinator.  cancelled records that the producer side aborted instead of
+ * delivering the payload.
  */
 struct AnserBloomFilterConsumeState
 {
 	AnserChannelKey channel_key;
 	bloom_filter *filter;
-	char	   *token;		/* QD session token for the libpq transport, or NULL */
 	int64		total_elems;	/* filter sizing, shared with the producer */
 	Size		max_payload_bytes;
 	uint64		seed;
@@ -54,15 +52,15 @@ struct AnserBloomFilterConsumeState
 	bool		cancelled;
 };
 
-static bool ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
-											  long registration_timeout_ms);
-static bool ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state);
+static bool ExecAnserBloomFilterConsumeSideband(AnserBloomFilterConsumeState *state,
+												long timeout_ms);
+static bool ExecAnserBloomFilterConsumeFinish(AnserBloomFilterConsumeState *state,
+											  void *payload, Size payload_len);
 
 AnserBloomFilterConsumeState *
 ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
 								int64 total_elems, Size max_payload_bytes,
-								uint32 expected_parts,
-								const char *token)
+								uint32 expected_parts)
 {
 	AnserBloomFilterConsumeState *state;
 
@@ -75,7 +73,6 @@ ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
 	state->max_payload_bytes = max_payload_bytes;
 	state->seed = AnserBloomSeed(channel_key->condition_key);
 	state->expected_parts = expected_parts;
-	state->token = (token != NULL && token[0] != '\0') ? pstrdup(token) : NULL;
 	return state;
 }
 
@@ -89,96 +86,33 @@ ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 	if (state->consumed)
 		return state->filter != NULL;
 
-	/*
-	 * Coordinator-local consumers read the channel map directly; segment
-	 * executors block on the send service over libpq to the QD.  The signatures
-	 * are identical -- only the transport differs.
-	 */
-	if (Gp_role == GP_ROLE_EXECUTE)
-		return ExecAnserBloomFilterConsumeClient(state);
-
-	return ExecAnserBloomFilterConsumeDirect(state, registration_timeout_ms);
+	return ExecAnserBloomFilterConsumeSideband(state, registration_timeout_ms);
 }
 
 /*
- * Direct shared-memory consume path (coordinator): wait for producer
- * registration, wait for READY, then copy the merged payload out of the
- * channel map.
+ * Dispatch-connection consume path.
+ *
+ * On a segment this blocks on our own dispatch socket until the coordinator
+ * pushes the merged filter; on the coordinator the merge happened in this very
+ * process, so there is nothing to wait for and we just read it.
  */
 static bool
-ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
-								  long registration_timeout_ms)
-{
-	void	   *payload;
-	Size		payload_len = 0;
-	bool		cancelled = false;
-	bool		ready;
-
-	if (!AnserWaitProducersRegistered(&state->channel_key,
-								   registration_timeout_ms))
-	{
-		state->consumed = true;
-		return false;
-	}
-
-	if (!AnserWaitReady(&state->channel_key, &cancelled))
-	{
-		state->cancelled = cancelled;
-		state->consumed = true;
-		return false;
-	}
-
-	payload = palloc((Size) gp_anser_max_info_size);
-	ready = AnserConsumeReady(&state->channel_key,
-						   payload,
-						   (Size) gp_anser_max_info_size,
-						   &payload_len,
-						   &cancelled);
-	if (!ready || cancelled)
-	{
-		pfree(payload);
-		state->cancelled = cancelled;
-		state->consumed = true;
-		return false;
-	}
-
-	/*
-	 * The coordinator has already unioned every segment's part into one merged
-	 * part (see AnserStorePayloadDSM), so we deserialize a single chunk rather
-	 * than unioning N.  The merged header's total_parts records how many parts
-	 * were folded, which we surface as the received count.
-	 */
-	{
-		uint32		part_index = 0;
-		uint32		folded = 0;
-
-		state->filter = AnserBloomDeserializePart(payload, payload_len,
-												  state->total_elems,
-												  state->max_payload_bytes,
-												  state->seed,
-												  &part_index, &folded);
-		state->received_parts = (state->filter != NULL) ? folded : 0;
-	}
-	pfree(payload);
-	state->consumed = true;
-	return state->filter != NULL;
-}
-
-/*
- * Network consume path (segment).  Blocks in the coordinator backend via libpq
- * until the send service delivers the whole payload (or cancels this consumer);
- * there is no registration/ready polling here -- the wait is unbounded and
- * cancellation is the only backstop.
- */
-static bool
-ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
+ExecAnserBloomFilterConsumeSideband(AnserBloomFilterConsumeState *state,
+									long timeout_ms)
 {
 	void	   *payload = NULL;
 	Size		payload_len = 0;
 	bool		cancelled = false;
+	bool		got;
 
-	if (!AnserClientConsumeWait(&state->channel_key, &payload, &payload_len,
-								&cancelled, state->token) || cancelled)
+	if (Gp_role == GP_ROLE_EXECUTE)
+		got = AnserSidebandConsumeWait(&state->channel_key, &payload,
+									   &payload_len, &cancelled, timeout_ms);
+	else
+		got = AnserDispatchLocalConsume(&state->channel_key, &payload,
+										&payload_len, &cancelled);
+
+	if (!got || cancelled)
 	{
 		if (payload != NULL)
 			pfree(payload);
@@ -187,23 +121,30 @@ ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
 		return false;
 	}
 
-	/*
-	 * The coordinator has already unioned every segment's part into one merged
-	 * part (see AnserStorePayloadDSM), so we deserialize a single chunk rather
-	 * than unioning N.  The merged header's total_parts records how many parts
-	 * were folded, which we surface as the received count.
-	 */
-	{
-		uint32		part_index = 0;
-		uint32		folded = 0;
+	return ExecAnserBloomFilterConsumeFinish(state, payload, payload_len);
+}
 
-		state->filter = AnserBloomDeserializePart(payload, payload_len,
-												  state->total_elems,
-												  state->max_payload_bytes,
-												  state->seed,
-												  &part_index, &folded);
-		state->received_parts = (state->filter != NULL) ? folded : 0;
-	}
+/*
+ * Turn a merged payload into this consumer's filter.
+ *
+ * The coordinator unions every segment's part into one before delivery, so a
+ * single chunk is deserialized rather than N; the merged header's total_parts
+ * records how many were folded, which we surface as the received count.
+ */
+static bool
+ExecAnserBloomFilterConsumeFinish(AnserBloomFilterConsumeState *state,
+								  void *payload, Size payload_len)
+{
+	uint32		part_index = 0;
+	uint32		folded = 0;
+
+	state->filter = AnserBloomDeserializePart(payload, payload_len,
+											  state->total_elems,
+											  state->max_payload_bytes,
+											  state->seed,
+											  &part_index, &folded);
+	state->received_parts = (state->filter != NULL) ? folded : 0;
+
 	if (payload != NULL)
 		pfree(payload);
 	state->consumed = true;

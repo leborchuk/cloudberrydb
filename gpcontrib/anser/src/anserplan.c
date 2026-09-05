@@ -38,7 +38,6 @@
 #include "anserplan.h"
 #include "cdb/cdbvars.h"
 #include "catalog/pg_type.h"
-#include "commands/extension.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "utils/acl.h"
@@ -58,13 +57,8 @@ typedef struct AnserInjectCtx
 	List	   *consumer_keys;	/* condition_keys already given a consumer node;
 								 * enforces one consumer per channel (see
 								 * anser_try_inject) */
-	char	   *token;		/* QD session token for the segment -> QD backward
-							 * connections; lazily registered at the first
-							 * injection, NULL when unavailable (fail open to
-							 * pg_hba-driven authentication) */
 } AnserInjectCtx;
 
-static bool anser_transport_installed(void);
 static int	anser_max_plan_node_id(Plan *plan);
 static bool anser_rf_size(double est_rows, int64 *total_elems,
 						  int64 *max_payload, int64 *planned_bytes);
@@ -90,16 +84,6 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
 	if (stmt == NULL || stmt->commandType != CMD_SELECT || stmt->planTree == NULL)
-		return;
-
-	/*
-	 * The injected nodes are only useful if the segments can call back into the
-	 * transport functions in *this* database, which means the extension has to
-	 * be installed here.  Without it we would dispatch a plan whose producers
-	 * and consumers all fail their libpq calls and fail open one by one; skip
-	 * the injection instead.
-	 */
-	if (!anser_transport_installed())
 		return;
 
 	{
@@ -131,36 +115,8 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 		ctx.next_plan_node_id = maxid + 1;
 		ctx.consumer_keys = NIL;
 
-		/*
-		 * Segment executors connect back to the QD to publish/consume bloom
-		 * parts; they authenticate with this session's token (the
-		 * parallel-retrieve-cursor model) instead of relying on pg_hba entries
-		 * for the segment hosts.  Keyed by the session user because that is
-		 * the identity the QEs connect with.  NULL means unavailable -- the
-		 * connection then falls back to ordinary pg_hba authentication.
-		 */
-		ctx.token = AnserGetOrCreateSessionToken(GetSessionUserId());
-
 		anser_inject_walk(stmt->planTree, &ctx);
 	}
-}
-
-/*
- * Is "CREATE EXTENSION anser" present in the current database?
- *
- * A pg_extension lookup, deliberately not a lookup of anser.publish() itself:
- * resolving a schema-qualified function name checks USAGE on the schema and
- * raises when the planning role lacks it, which would turn a missing privilege
- * into a failed query instead of an unfiltered one.
- *
- * The lookup runs per planned statement -- only for statements that already
- * passed the GUC tests -- rather than being cached, so CREATE EXTENSION takes
- * effect immediately, without an invalidation callback.
- */
-static bool
-anser_transport_installed(void)
-{
-	return OidIsValid(get_extension_oid("anser", true));
 }
 
 /*
@@ -411,14 +367,14 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	/* Producer wraps the build base scan; keyed by the mapped build attno. */
 	producer = AnserBuildBloomProducerScan(build_scan, build_attno, condition_id,
 										   condition_key, total_elems, max_payload,
-										   planned_bytes, ctx->token);
+										   planned_bytes);
 	producer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
 	outerPlan(build_parent) = (Plan *) producer;
 
 	/* Consumer wraps the probe scan; keyed by the outer (probe) attno. */
 	consumer = AnserBuildBloomConsumerScan(probe, outer_attno, condition_id,
 										   condition_key, total_elems, max_payload,
-										   planned_bytes, ctx->token);
+										   planned_bytes);
 	consumer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
 	outerPlan(hj) = (Plan *) consumer;
 

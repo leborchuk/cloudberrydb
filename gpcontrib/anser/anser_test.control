@@ -20,4 +20,3 @@ comment = 'test helpers for the anser extension'
 default_version = '1.0'
 module_pathname = '$libdir/anser'
 relocatable = true
-requires = 'anser'

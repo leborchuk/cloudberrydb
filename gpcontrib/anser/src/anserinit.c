@@ -18,17 +18,18 @@
  * under the License.
  *
  * anserinit.c
- *	  Module entry point: GUCs, shared memory, background services, and the
- *	  core hooks the Anser subsystem hangs off.
+ *	  Module entry point: GUCs and the core hooks Anser hangs off.
  *
  * Anser is a shared_preload_libraries extension.  Everything it needs from the
  * server is reached through an existing extensibility point:
  *
- *	 shmem_request_hook / shmem_startup_hook  the channel map and its LWLocks
- *	 RegisterBackgroundWorker                 the gather and send services
- *	 planner_hook                             runtime-filter injection
- *	 RegisterCustomScanMethods                the injected plan nodes
- *	 CustomAuth*_hook                         segment -> QD token connections
+ *	 planner_hook               runtime-filter injection
+ *	 RegisterCustomScanMethods  the injected plan nodes
+ *	 cdbdisp_notify_hook        parts arriving from segments
+ *	 ExecutorEnd_hook           dropping a query's channels
+ *
+ * It must be preloaded, because a segment backend deserializing a dispatched
+ * plan has no opportunity to load the library first.
  *
  * IDENTIFICATION
  *	  gpcontrib/anser/src/anserinit.c
@@ -37,33 +38,36 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "anser.h"
 #include "anserplan.h"
+#include "ansersideband.h"
+#include "cdb/cdbdisp.h"
 #include "cdb/cdbvars.h"
-#include "libpq/auth.h"
+#include "executor/executor.h"
 #include "miscadmin.h"
 #include "optimizer/planner.h"
-#include "postmaster/bgworker.h"
-#include "storage/ipc.h"
-#include "storage/lwlock.h"
-#include "storage/shmem.h"
 #include "utils/guc.h"
 
 PG_MODULE_MAGIC;
 
 void		_PG_init(void);
 
+bool		gp_anser_enable = false;
+bool		gp_anser_runtime_filter = false;
+int			gp_anser_max_info_size = 64 * 1024 * 1024 + 1024 * 1024;
+int			gp_anser_timeout_ms = 1000;
+
 static void anser_define_gucs(void);
-static void anser_register_services(void);
-static void anser_shmem_request(void);
-static void anser_shmem_startup(void);
 static PlannedStmt *anser_planner(Query *parse, const char *query_string,
 								  int cursorOptions, ParamListInfo boundParams,
 								  OptimizerOptions *optimizer_options);
 
-static shmem_request_hook_type prev_shmem_request_hook = NULL;
-static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static planner_hook_type prev_planner_hook = NULL;
+static ExecutorEnd_hook_type prev_ExecutorEnd_hook = NULL;
+
+static void anser_executor_end(QueryDesc *queryDesc);
+static void anser_xact_callback(XactEvent event, void *arg);
 
 void
 _PG_init(void)
@@ -71,21 +75,31 @@ _PG_init(void)
 	anser_define_gucs();
 
 	/*
-	 * Only a preloaded library can request shared memory, register background
-	 * workers, or be relied on to have installed its hooks in every backend.
-	 * Loaded any other way, Anser stays inert: the GUCs exist (so a stray
-	 * setting is not an error) but nothing is wired up.
+	 * Only a preloaded library can be relied on to have installed its hooks in
+	 * every backend.  Loaded any other way, Anser stays inert: the GUCs exist
+	 * (so a stray setting is not an error) but nothing is wired up.
 	 */
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
-	prev_shmem_request_hook = shmem_request_hook;
-	shmem_request_hook = anser_shmem_request;
-	prev_shmem_startup_hook = shmem_startup_hook;
-	shmem_startup_hook = anser_shmem_startup;
-
 	prev_planner_hook = planner_hook;
 	planner_hook = anser_planner;
+
+	/*
+	 * Channels live in backend memory on both ends, so they need a point to be
+	 * dropped.  ExecutorEnd covers the normal path; the transaction callback
+	 * catches queries that end by erroring.
+	 */
+	prev_ExecutorEnd_hook = ExecutorEnd_hook;
+	ExecutorEnd_hook = anser_executor_end;
+	RegisterXactCallback(anser_xact_callback, NULL);
+
+	/*
+	 * Handle Anser notifies arriving from QEs on the dispatch connections.
+	 * Installed unconditionally: it is inert until a segment sends one, and a
+	 * QE that never dispatches never calls it.
+	 */
+	cdbdisp_notify_hook = AnserDispatchNotifyHandler;
 
 	/*
 	 * The producer and consumer nodes travel to the segments inside dispatched
@@ -93,19 +107,6 @@ _PG_init(void)
 	 * by name.  Registering here covers QD and QE alike.
 	 */
 	AnserRegisterRuntimeFilterMethods();
-
-	if (gp_anser_enable)
-	{
-		/*
-		 * Own the authentication of incoming segment -> QD connections.  With
-		 * Anser disabled the hooks stay unset and such a connection is simply
-		 * authenticated the ordinary way, through pg_hba.
-		 */
-		CustomAuthClaims_hook = AnserConnClaims;
-		CustomAuthCheckPassword_hook = AnserConnCheckPassword;
-
-		anser_register_services();
-	}
 }
 
 /*
@@ -117,10 +118,10 @@ anser_define_gucs(void)
 {
 	DefineCustomBoolVariable("anser.enable",
 							 "Enables the Anser adaptive information sharing subsystem.",
-							 "When disabled, Anser does not allocate shared memory and its background services are not started.",
+							 "When disabled, the plan pass never injects anything and no filters are exchanged.",
 							 &gp_anser_enable,
 							 false,
-							 PGC_POSTMASTER,
+							 PGC_SIGHUP,
 							 0,
 							 NULL, NULL, NULL);
 
@@ -132,26 +133,6 @@ anser_define_gucs(void)
 							 PGC_USERSET,
 							 GUC_EXPLAIN,
 							 NULL, NULL, NULL);
-
-	DefineCustomBoolVariable("anser.conn",
-							 "Specify this is a connection for the Anser runtime filter transport.",
-							 NULL,
-							 &gp_anser_conn,
-							 false,
-							 PGC_BACKEND,
-							 GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_DISALLOW_IN_FILE,
-							 NULL, NULL, NULL);
-
-	DefineCustomIntVariable("anser.max_channels",
-							"Sets the maximum number of Anser channels.",
-							"This value sizes the fixed Anser shared-memory channel map at postmaster start. "
-							"0 (the default) auto-sizes it to max_connections * gp_max_slices, "
-							"falling back to a fixed per-connection budget when gp_max_slices is unbounded.",
-							&gp_anser_max_channels,
-							0, 0, INT_MAX,
-							PGC_POSTMASTER,
-							0,
-							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("anser.max_info_size",
 							"Sets the maximum byte size of one Anser information record.",
@@ -171,91 +152,7 @@ anser_define_gucs(void)
 							GUC_UNIT_MS,
 							NULL, NULL, NULL);
 
-	DefineCustomIntVariable("anser.max_consumers_per_channel",
-							"Sets the maximum number of waiting Anser consumers per channel.",
-							"This value sizes the fixed Anser consumer wait table at postmaster start "
-							"(anser.max_channels * this). Each channel has one consumer per segment, "
-							"so it should be set to the number of primary segments; the plan pass injects "
-							"at most one consumer per channel. It cannot be auto-derived because the "
-							"segment count is a catalog value unavailable at postmaster start. Over-sizing "
-							"only wastes shared memory; under-sizing makes surplus consumers fail open "
-							"(unfiltered), never wrong results.",
-							&gp_anser_max_consumers_per_channel,
-							64, 1, INT_MAX,
-							PGC_POSTMASTER,
-							0,
-							NULL, NULL, NULL);
-
 	MarkGUCPrefixReserved("anser");
-}
-
-/*
- * Register the gather and send services.
- *
- * Both live on the coordinator only.  The decision is made here rather than in
- * a bgw_start_rule because the postmaster consults that field only for its own
- * auxiliary process list, not for workers an extension registers.  Gp_role is
- * already settled at this point: the configuration files (which carry
- * gp_contentid) are processed before shared_preload_libraries.
- */
-static void
-anser_register_services(void)
-{
-	BackgroundWorker worker;
-	int			i;
-
-	static const struct
-	{
-		const char *name;
-		const char *main_func;
-	}			services[] =
-	{
-		{"anser gather service", "AnserGatherServiceMain"},
-		{"anser send service", "AnserSendServiceMain"}
-	};
-
-	if (!AnserStartRule((Datum) 0))
-		return;
-
-	for (i = 0; i < lengthof(services); i++)
-	{
-		MemSet(&worker, 0, sizeof(worker));
-		worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
-		worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
-		worker.bgw_restart_time = 1;
-		worker.bgw_notify_pid = 0;
-		snprintf(worker.bgw_name, BGW_MAXLEN, "%s", services[i].name);
-		snprintf(worker.bgw_type, BGW_MAXLEN, "%s", services[i].name);
-		snprintf(worker.bgw_library_name, BGW_MAXLEN, "anser");
-		snprintf(worker.bgw_function_name, BGW_MAXLEN, "%s",
-				 services[i].main_func);
-
-		RegisterBackgroundWorker(&worker);
-	}
-}
-
-static void
-anser_shmem_request(void)
-{
-	if (prev_shmem_request_hook)
-		prev_shmem_request_hook();
-
-	if (!gp_anser_enable)
-		return;
-
-	RequestAddinShmemSpace(AnserShmemSize());
-	RequestNamedLWLockTranche(ANSER_LWLOCK_TRANCHE, ANSER_NUM_LWLOCKS);
-}
-
-static void
-anser_shmem_startup(void)
-{
-	if (prev_shmem_startup_hook)
-		prev_shmem_startup_hook();
-
-	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	AnserShmemInit();
-	LWLockRelease(AddinShmemInitLock);
 }
 
 /*
@@ -279,4 +176,40 @@ anser_planner(Query *parse, const char *query_string, int cursorOptions,
 	AnserApplyRuntimeFilters(result);
 
 	return result;
+}
+
+/*
+ * Drop the transport's per-query state.
+ *
+ * Nested executor runs (a function body, say) must not clear state the outer
+ * query is still using, so only the outermost end resets.
+ */
+static void
+anser_executor_end(QueryDesc *queryDesc)
+{
+	static int	nesting_level = 0;
+
+	nesting_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorEnd_hook)
+			prev_ExecutorEnd_hook(queryDesc);
+		else
+			standard_ExecutorEnd(queryDesc);
+	}
+	PG_FINALLY();
+	{
+		nesting_level--;
+	}
+	PG_END_TRY();
+
+	if (nesting_level == 0)
+		AnserSidebandResetAll();
+}
+
+static void
+anser_xact_callback(XactEvent event, void *arg)
+{
+	if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT)
+		AnserSidebandResetAll();
 }

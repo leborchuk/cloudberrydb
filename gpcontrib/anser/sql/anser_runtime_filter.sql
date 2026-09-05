@@ -6,9 +6,6 @@
 -- degrades to the leaf case.  Either way the feature must (a) inject the
 -- producer/consumer nodes and (b) never change query results.
 
--- The plan pass only injects when the extension is installed in this
--- database, since that is what makes the segments' callbacks resolvable.
-CREATE EXTENSION anser;
 
 -- Deterministic plan shape: force a hash join.
 SET enable_nestloop = off;
@@ -144,4 +141,3 @@ RESET optimizer;
 RESET enable_nestloop;
 RESET enable_mergejoin;
 
-DROP EXTENSION anser;

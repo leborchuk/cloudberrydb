@@ -29,21 +29,19 @@
 
 #include "anser.h"
 #include "anserbloom.h"
-#include "anserclient.h"
 #include "anserfilter.h"
+#include "ansersideband.h"
 #include "cdb/cdbvars.h"
 
 /*
  * State for a single bloom filter producer: the target channel, the filter
- * being built, this producer's identity within total_parts, and the QD
- * session token used by segments to publish over libpq.  published and
- * cancelled guard against double publication and drive teardown.
+ * being built, and this producer's identity within total_parts.  published
+ * and cancelled guard against double publication and drive teardown.
  */
 struct AnserBloomFilterProduceState
 {
 	AnserChannelKey channel_key;
 	bloom_filter *filter;
-	char	   *token;		/* QD session token for the libpq transport, or NULL */
 	uint32		part_index;
 	uint32		total_parts;
 	bool		published;
@@ -51,20 +49,25 @@ struct AnserBloomFilterProduceState
 };
 
 /*
- * Publish one part, choosing the transport by role: coordinator-local callers
- * touch the channel map directly (no self-connection), while segment executors
- * go over libpq to the QD.  total_parts doubles as expected_producers: each
- * producer contributes exactly one part.
+ * Publish one part.
+ *
+ * A segment sends it to the coordinator over the dispatch connection; a
+ * coordinator-local producer hands it to the same per-query channel table the
+ * coordinator merges into, since it has no connection to itself.  total_parts
+ * doubles as expected_producers: each producer contributes exactly one part.
  */
 static bool
 AnserProducePublishPart(AnserBloomFilterProduceState *state,
 						const void *payload, Size payload_len, bool cancelled)
 {
 	if (Gp_role == GP_ROLE_EXECUTE)
-		return AnserClientPublish(&state->channel_key, state->total_parts,
-								  payload, payload_len, cancelled, state->token);
+		return AnserSidebandPublish(&state->channel_key, state->part_index,
+									state->total_parts, payload, payload_len,
+									cancelled);
 
-	return AnserPublish(&state->channel_key, payload, payload_len, cancelled);
+	return AnserDispatchLocalPublish(&state->channel_key, state->part_index,
+									 state->total_parts, payload, payload_len,
+									 cancelled);
 }
 
 AnserBloomFilterProduceState *
@@ -72,8 +75,7 @@ ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
 								int64 total_elems,
 								Size max_payload_bytes,
 								uint32 part_index,
-								uint32 total_parts,
-								const char *token)
+								uint32 total_parts)
 {
 	AnserBloomFilterProduceState *state;
 	uint64		seed;
@@ -85,7 +87,6 @@ ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
 	state->channel_key = *channel_key;
 	state->part_index = part_index;
 	state->total_parts = total_parts;
-	state->token = (token != NULL && token[0] != '\0') ? pstrdup(token) : NULL;
 	seed = AnserBloomSeed(channel_key->condition_key);
 	state->filter = AnserBloomCreate(total_elems, max_payload_bytes, seed);
 

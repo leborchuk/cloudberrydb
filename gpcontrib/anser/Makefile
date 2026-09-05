@@ -27,33 +27,31 @@
 MODULE_big = anser
 OBJS = \
 	$(WIN32RES) \
-	src/anser.o \
-	src/anserauth.o \
 	src/anserbloomconsume.o \
 	src/anserbloomproduce.o \
-	src/anserclient.o \
+	src/anserdispatch.o \
 	src/anserfilter.o \
-	src/anserfuncs.o \
 	src/anserinit.o \
 	src/anserplan.o \
 	src/anserplanexec.o \
-	src/anserservice.o \
+	src/ansersideband.o \
 	src/anser_test.o
 
 PGFILEDESC = "anser - adaptive information sharing runtime filters"
 
-# anser_test exposes the internal C API to the regression tests; its functions
-# live in the same library, so it is a second control file over $libdir/anser
-# rather than a separate module.
-EXTENSION = anser anser_test
-DATA = anser--1.0.sql anser_test--1.0.sql
+# The subsystem itself needs no catalog objects -- it is configured entirely by
+# GUCs and travels over the dispatch connection.  The only extension here is
+# anser_test, which exposes the internal C API to the regression tests from
+# inside the same library.
+EXTENSION = anser_test
+DATA = anser_test--1.0.sql
 
 REGRESS = anser_test anser_runtime_filter
 
-# src/anserclient.c opens libpq connections back to the coordinator, and
-# src/anser_test.c drives loopback connections of its own.
+# src/anserdispatch.c writes sideband messages onto the dispatcher's own libpq
+# connections, so it needs libpq's internal headers (as the dispatcher itself
+# does); the symbols resolve against the backend.
 PG_CPPFLAGS = -I$(srcdir)/include -I$(libpq_srcdir)
-SHLIB_LINK_INTERNAL = $(libpq)
 SHLIB_PREREQS = submake-libpq
 
 ifdef USE_PGXS
