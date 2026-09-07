@@ -112,10 +112,16 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 	bool		ok;
 
 	if (state == NULL || state->published)
-		return false;
-
-	if (state->cancelled)
 	{
+		ANSER_DEBUG("anser: publish skipped (%s)",
+					state == NULL ? "no producer state" : "already published");
+		return false;
+	}
+
+	if (state->cancelled || state->filter == NULL)
+	{
+		ANSER_DEBUG("anser: publishing a cancel (%s)",
+					state->cancelled ? "producer cancelled" : "no filter");
 		state->published = true;
 		return AnserProducePublishPart(state, NULL, 0, true);
 	}
@@ -137,6 +143,9 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 								  &payload_len);
 	if (ok)
 		ok = AnserProducePublishPart(state, payload, payload_len, false);
+	else
+		ANSER_DEBUG("anser: publish skipped: could not serialize part (size=%zu)",
+					payload_size);
 
 	pfree(payload);
 	state->published = true;
@@ -154,14 +163,19 @@ ExecAnserBloomFilterProduceCancel(AnserBloomFilterProduceState *state)
 	return AnserProducePublishPart(state, NULL, 0, true);
 }
 
+/*
+ * Free the producer state.
+ *
+ * Deliberately does NOT publish a cancel for an unpublished producer: whether
+ * silence means "ran and was abandoned" or "never ran at all" is knowable only
+ * to the node, and the two need opposite handling (see anser_produce_end in
+ * anserplanexec.c).
+ */
 void
 ExecEndAnserBloomFilterProduce(AnserBloomFilterProduceState *state)
 {
 	if (state == NULL)
 		return;
-
-	if (!state->published)
-		(void) ExecAnserBloomFilterProduceCancel(state);
 
 	if (state->filter != NULL)
 		bloom_free(state->filter);

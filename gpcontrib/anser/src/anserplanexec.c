@@ -83,6 +83,7 @@ typedef struct AnserBloomProduceScanState
 	AnserBloomFilterProduceState *produce;
 	AttrNumber	key_attno;
 	int64		planned_bytes;
+	bool		started;		/* this process actually executed the node */
 	bool		published;
 } AnserBloomProduceScanState;
 
@@ -332,6 +333,7 @@ anser_produce_begin(CustomScanState *node, EState *estate, int eflags)
 
 	st->key_attno = (AttrNumber) intVal(list_nth(priv, ANSER_RF_PRIV_KEY_ATTNO));
 	st->planned_bytes = intVal(list_nth(priv, ANSER_RF_PRIV_PLANNED_BYTES));
+	st->started = false;
 	st->published = false;
 
 	anser_rf_build_key(cscan, &key);
@@ -339,6 +341,9 @@ anser_produce_begin(CustomScanState *node, EState *estate, int eflags)
 
 	st->produce = ExecInitAnserBloomFilterProduce(&key, total_elems, max_payload,
 												  part_index, total_parts);
+	ANSER_DEBUG("anser: producer init cond=%u part=%u/%u elems=" INT64_FORMAT " payload=%zu state=%s",
+				key.condition_id, part_index, total_parts, total_elems,
+				max_payload, st->produce != NULL ? "ok" : "NULL");
 
 	node->custom_ps = list_make1(ExecInitNode(child, estate, eflags));
 }
@@ -352,12 +357,22 @@ anser_produce_next(CustomScanState *node)
 {
 	AnserBloomProduceScanState *st = (AnserBloomProduceScanState *) node;
 	PlanState  *child = (PlanState *) linitial(node->custom_ps);
-	TupleTableSlot *slot = ExecProcNode(child);
+	TupleTableSlot *slot;
+
+	/*
+	 * Every process that deserializes the plan builds this node, but only the
+	 * ones running its slice ever execute it; the rest must stay silent.
+	 */
+	st->started = true;
+
+	slot = ExecProcNode(child);
 
 	if (TupIsNull(slot))
 	{
 		if (!st->published)
 		{
+			ANSER_DEBUG("anser: producer child exhausted, publishing (state=%s)",
+						st->produce != NULL ? "ok" : "NULL");
 			(void) ExecAnserBloomFilterProducePublish(st->produce);
 			st->published = true;
 		}
@@ -387,6 +402,20 @@ static void
 anser_produce_end(CustomScanState *node)
 {
 	AnserBloomProduceScanState *st = (AnserBloomProduceScanState *) node;
+
+	/*
+	 * A producer that ran but never published was abandoned mid-scan (squelch,
+	 * or an error upstream), and consumers must be told so rather than left
+	 * waiting for a part that will never come.  A producer that never ran at
+	 * all belongs to another slice: cancelling here would destroy a channel
+	 * this process has no part in -- which is exactly what the coordinator
+	 * used to do to every runtime filter.
+	 */
+	if (st->started && !st->published && st->produce != NULL)
+	{
+		(void) ExecAnserBloomFilterProduceCancel(st->produce);
+		st->published = true;
+	}
 
 	if (st->produce != NULL)
 		ExecEndAnserBloomFilterProduce(st->produce);
