@@ -140,6 +140,7 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key,
 {
 	char	   *msg;
 	TimestampTz start;
+	int			reads = 0;
 
 	if (payload != NULL)
 		*payload = NULL;
@@ -178,9 +179,13 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key,
 		if (timeout_ms >= 0 &&
 			TimestampDifferenceExceeds(start, GetCurrentTimestamp(), timeout_ms))
 		{
-			ANSER_DEBUG("anser: seg%d gave up on cond=%u after %ld ms",
+			/*
+			 * Report what we saw, not just that we waited: "nothing arrived"
+			 * and "something arrived for another channel" are different bugs.
+			 */
+			ANSER_DEBUG("anser: seg%d gave up on cond=%u after %ld ms (read %d message(s), %d unclaimed)",
 						GpIdentity.segindex, channel_key->condition_id,
-						timeout_ms);
+						timeout_ms, reads, list_length(AnserInbox));
 			return false;
 		}
 
@@ -193,6 +198,7 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key,
 		 */
 		if (!anser_sideband_read_one(ANSER_SIDEBAND_POLL_MS))
 			return false;
+		reads = list_length(AnserInbox);
 	}
 }
 
