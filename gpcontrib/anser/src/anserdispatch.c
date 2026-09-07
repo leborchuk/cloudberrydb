@@ -206,6 +206,9 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 						   struct pgNotify *notify)
 {
 	PGnotify   *n = (PGnotify *) notify;
+	CdbDispatchResult *dr = (CdbDispatchResult *) dispatchResult;
+	int			sender = (dr != NULL && dr->segdbDesc != NULL)
+		? dr->segdbDesc->segindex : -99;
 	AnserWireMsg msg;
 	AnserDispChannel *chan;
 	MemoryContext oldcxt;
@@ -233,15 +236,15 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 
 	if (msg.kind == ANSER_WIRE_KIND_SUBSCRIBE)
 	{
-		PGconn	   *conn = ((CdbDispatchResult *) dispatchResult)->segdbDesc->conn;
+		PGconn	   *conn = dr->segdbDesc->conn;
 
 		/*
 		 * A consumer can subscribe after the channel is already complete --
 		 * producers on other segments may well have finished first -- so
 		 * deliver immediately in that case rather than recording interest.
 		 */
-		ANSER_DEBUG("anser: QD subscribe cond=%u (channel %s)",
-					msg.key.condition_id,
+		ANSER_DEBUG("anser: QD subscribe cond=%u from seg%d (channel %s)",
+					msg.key.condition_id, sender,
 					chan->complete ? "complete, delivering now" : "still collecting");
 		if (chan->complete)
 			(void) anser_disp_push(conn, chan);
@@ -271,8 +274,9 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 
 		anser_disp_apply_part(chan, raw, (Size) raw_len, msg.total_parts,
 							  (msg.flags & ANSER_WIRE_F_CANCELLED) != 0);
-		ANSER_DEBUG("anser: QD part cond=%u %d/%d bytes=%d -> %s",
-					msg.key.condition_id, chan->parts_received,
+		ANSER_DEBUG("anser: QD part cond=%u from seg%d (says part %d of %d) %d/%d bytes=%d -> %s",
+					msg.key.condition_id, sender, msg.part_index,
+					msg.total_parts, chan->parts_received,
 					chan->expected_parts, raw_len,
 					chan->cancelled ? "cancelled" :
 					chan->complete ? "complete" : "collecting");
@@ -301,8 +305,20 @@ anser_disp_apply_part(AnserDispChannel *chan, const void *payload,
 	if (chan->cancelled)
 		return;					/* already dead; nothing to do */
 
-	if (total_parts > 0 && chan->expected_parts == 0)
+	if (total_parts > chan->expected_parts)
+	{
+		/*
+		 * Take the largest count any producer claims.  Letting a later part
+		 * lower it would complete the channel early and deliver a filter
+		 * missing another segment's keys -- a false negative, which drops
+		 * joinable rows.  Disagreement means the producers computed their
+		 * slice width differently and is worth seeing.
+		 */
+		if (chan->expected_parts != 0)
+			elog(LOG, "anser: cond=%u producer count changed %d -> %d",
+				 chan->key.condition_id, chan->expected_parts, total_parts);
 		chan->expected_parts = total_parts;
+	}
 
 	if (cancelled)
 	{
@@ -498,6 +514,11 @@ AnserDispatchLocalPublish(const AnserChannelKey *channel_key,
 	{
 		anser_disp_apply_part(chan, payload, payload_len, (int) total_parts,
 							  cancelled);
+		ANSER_DEBUG("anser: QD local part cond=%u (part %u of %u) %d/%d bytes=%zu -> %s",
+					channel_key->condition_id, part_index, total_parts,
+					chan->parts_received, chan->expected_parts, payload_len,
+					chan->cancelled ? "cancelled" :
+					chan->complete ? "complete" : "collecting");
 		if (chan->complete)
 			anser_disp_deliver(chan);
 	}
