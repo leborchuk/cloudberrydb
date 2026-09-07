@@ -33,6 +33,17 @@
  * parts are folded in place as they arrive, so only the final fold is on the
  * critical path.
  *
+ * A note on libpq linkage.  The connections we write to were created by the
+ * copy of libpq that is statically linked into the postgres binary, and every
+ * symbol listed in libpq's exports.txt is deliberately made *local* in that
+ * binary (see the version-script hack in src/backend/Makefile) precisely so a
+ * module cannot end up driving one connection through two copies of libpq.
+ * So this file must not call the public PQ* API: linking libpq.so to obtain it
+ * would create exactly the mixture that hack exists to prevent.  The internal
+ * pq* writers are not in exports.txt and so remain global in the backend,
+ * which is how pqPutMsgStart() and friends resolve here; the two accessors we
+ * would otherwise want are inlined below, straight off the struct.
+ *
  * IDENTIFICATION
  *	  gpcontrib/anser/src/anserdispatch.c
  *
@@ -93,6 +104,26 @@ static void anser_disp_apply_part(AnserDispChannel *chan, const void *payload,
 								  Size payload_len, int total_parts, bool cancelled);
 static void anser_disp_deliver(AnserDispChannel *chan);
 static bool anser_disp_push(PGconn *conn, AnserDispChannel *chan);
+
+/*
+ * PQstatus() / PQerrorMessage() equivalents.  See the linkage note above for
+ * why these are not the real thing; libpq-int.h gives us the full struct.
+ */
+static inline bool
+anser_conn_ok(const PGconn *conn)
+{
+	return conn != NULL && conn->status == CONNECTION_OK;
+}
+
+static inline const char *
+anser_conn_error(const PGconn *conn)
+{
+	if (conn == NULL)
+		return "connection pointer is NULL";
+	if (PQExpBufferBroken(&conn->errorMessage))
+		return "out of memory";
+	return conn->errorMessage.data;
+}
 
 /*
  * Per-query state lives in its own context so it can be dropped wholesale.
@@ -339,7 +370,7 @@ anser_disp_push(PGconn *conn, AnserDispChannel *chan)
 	int			keylen = (int) strlen(chan->key.condition_key);
 	int			paylen = chan->cancelled ? 0 : (int) chan->payload_len;
 
-	if (conn == NULL || PQstatus(conn) != CONNECTION_OK)
+	if (!anser_conn_ok(conn))
 		return false;
 
 	/*
@@ -357,7 +388,7 @@ anser_disp_push(PGconn *conn, AnserDispChannel *chan)
 		pqFlush(conn) < 0)
 	{
 		elog(LOG, "anser: could not deliver filter for condition %u: %s",
-			 chan->key.condition_id, PQerrorMessage(conn));
+			 chan->key.condition_id, anser_conn_error(conn));
 		return false;
 	}
 

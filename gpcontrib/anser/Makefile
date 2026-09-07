@@ -50,7 +50,10 @@ REGRESS = anser_test anser_runtime_filter
 
 # src/anserdispatch.c writes sideband messages onto the dispatcher's own libpq
 # connections, so it needs libpq's internal headers (as the dispatcher itself
-# does); the symbols resolve against the backend.
+# does).  Deliberately NOT linked against libpq: the pq* writers we use stay
+# global in the postgres binary, while the public PQ* API is made local there
+# on purpose (src/backend/Makefile), so linking libpq.so would put a second
+# copy of libpq on connections the backend's copy created.
 PG_CPPFLAGS = -I$(srcdir)/include -I$(libpq_srcdir)
 SHLIB_PREREQS = submake-libpq
 
