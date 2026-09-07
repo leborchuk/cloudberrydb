@@ -62,7 +62,23 @@ typedef struct AnserChannelKey
 /* GUCs (defined in anserinit.c). */
 extern bool gp_anser_enable;
 extern bool gp_anser_runtime_filter;
+extern bool gp_anser_debug;
 extern int	gp_anser_max_info_size;
 extern int	gp_anser_timeout_ms;
+
+/*
+ * Trace the handoff between producers, the coordinator and consumers.
+ *
+ * Every step of the exchange is invisible in EXPLAIN until it is over -- a
+ * consumer that waits and gets nothing looks exactly like one whose producers
+ * never published -- so the path is traceable on demand rather than only
+ * reconstructable from a debugger.  LOG level, so it lands in the log of
+ * whichever process it happened in.
+ */
+#define ANSER_DEBUG(...) \
+	do { \
+		if (gp_anser_debug) \
+			elog(LOG, __VA_ARGS__); \
+	} while (0)
 
 #endif							/* ANSER_H */

@@ -55,6 +55,7 @@ void		_PG_init(void);
 
 bool		gp_anser_enable = false;
 bool		gp_anser_runtime_filter = false;
+bool		gp_anser_debug = false;
 int			gp_anser_max_info_size = 64 * 1024 * 1024 + 1024 * 1024;
 int			gp_anser_timeout_ms = 1000;
 
@@ -132,6 +133,15 @@ anser_define_gucs(void)
 							 false,
 							 PGC_USERSET,
 							 GUC_EXPLAIN,
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("anser.debug",
+							 "Logs each step of the Anser filter exchange.",
+							 "Traces publish, merge, delivery and receive in the log of the process each happens in.",
+							 &gp_anser_debug,
+							 false,
+							 PGC_USERSET,
+							 0,
 							 NULL, NULL, NULL);
 
 	DefineCustomIntVariable("anser.max_info_size",

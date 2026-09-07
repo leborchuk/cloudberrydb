@@ -216,7 +216,8 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 
 	if (n->extra == NULL || !anser_disp_parse(n->extra, &msg))
 	{
-		elog(LOG, "anser: ignoring malformed message from a segment");
+		elog(LOG, "anser: ignoring malformed message from a segment (len=%zu)",
+			 n->extra != NULL ? strlen(n->extra) : (size_t) 0);
 		return true;
 	}
 
@@ -239,6 +240,9 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 		 * producers on other segments may well have finished first -- so
 		 * deliver immediately in that case rather than recording interest.
 		 */
+		ANSER_DEBUG("anser: QD subscribe cond=%u (channel %s)",
+					msg.key.condition_id,
+					chan->complete ? "complete, delivering now" : "still collecting");
 		if (chan->complete)
 			(void) anser_disp_push(conn, chan);
 		else
@@ -267,6 +271,11 @@ AnserDispatchNotifyHandler(struct CdbDispatchResult *dispatchResult,
 
 		anser_disp_apply_part(chan, raw, (Size) raw_len, msg.total_parts,
 							  (msg.flags & ANSER_WIRE_F_CANCELLED) != 0);
+		ANSER_DEBUG("anser: QD part cond=%u %d/%d bytes=%d -> %s",
+					msg.key.condition_id, chan->parts_received,
+					chan->expected_parts, raw_len,
+					chan->cancelled ? "cancelled" :
+					chan->complete ? "complete" : "collecting");
 		if (raw != NULL)
 			pfree(raw);
 	}
@@ -348,6 +357,8 @@ anser_disp_deliver(AnserDispChannel *chan)
 {
 	ListCell   *lc;
 
+	ANSER_DEBUG("anser: QD delivering cond=%u to %d subscriber(s)",
+				chan->key.condition_id, list_length(chan->subscribers));
 	foreach(lc, chan->subscribers)
 		(void) anser_disp_push((PGconn *) lfirst(lc), chan);
 
@@ -392,6 +403,8 @@ anser_disp_push(PGconn *conn, AnserDispChannel *chan)
 		return false;
 	}
 
+	ANSER_DEBUG("anser: QD pushed cond=%u bytes=%d cancelled=%d",
+				chan->key.condition_id, paylen, chan->cancelled ? 1 : 0);
 	return true;
 }
 

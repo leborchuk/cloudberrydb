@@ -115,6 +115,10 @@ AnserSidebandPublish(const AnserChannelKey *channel_key,
 								(flags & ANSER_WIRE_F_CANCELLED) ? NULL : payload,
 								(flags & ANSER_WIRE_F_CANCELLED) ? 0 : payload_len);
 	ok = anser_sideband_send(msg);
+	ANSER_DEBUG("anser: seg%d published cond=%u part=%u/%u bytes=%zu cancelled=%d sent=%d",
+				GpIdentity.segindex, channel_key->condition_id, part_index,
+				total_parts, payload_len,
+				(flags & ANSER_WIRE_F_CANCELLED) ? 1 : 0, ok ? 1 : 0);
 	pfree(msg);
 
 	return ok;
@@ -160,6 +164,8 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key,
 		return false;
 	}
 	pfree(msg);
+	ANSER_DEBUG("anser: seg%d subscribed cond=%u, waiting up to %ld ms",
+				GpIdentity.segindex, channel_key->condition_id, timeout_ms);
 
 	start = GetCurrentTimestamp();
 	for (;;)
@@ -171,7 +177,12 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key,
 
 		if (timeout_ms >= 0 &&
 			TimestampDifferenceExceeds(start, GetCurrentTimestamp(), timeout_ms))
+		{
+			ANSER_DEBUG("anser: seg%d gave up on cond=%u after %ld ms",
+						GpIdentity.segindex, channel_key->condition_id,
+						timeout_ms);
 			return false;
+		}
 
 		/*
 		 * Any message we read lands in the inbox; the loop then rechecks
@@ -295,6 +306,9 @@ anser_sideband_read_one(long timeout_ms)
 	}
 	AnserInbox = lappend(AnserInbox, entry);
 	MemoryContextSwitchTo(oldcxt);
+	ANSER_DEBUG("anser: seg%d received cond=%u bytes=%zu cancelled=%d",
+				GpIdentity.segindex, (uint32) condid, entry->payload_len,
+				entry->cancelled ? 1 : 0);
 
 	pfree(buf.data);
 	return true;
