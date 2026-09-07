@@ -49,6 +49,7 @@
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
 #include "storage/latch.h"
+#include "tcop/dest.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"

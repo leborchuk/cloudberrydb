@@ -46,6 +46,7 @@
 #include "anser.h"
 #include "anserfilter.h"
 #include "ansersideband.h"
+#include "cdb/cdbconn.h"
 #include "cdb/cdbdisp.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbvars.h"

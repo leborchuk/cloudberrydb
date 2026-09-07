@@ -136,16 +136,16 @@ anser_define_gucs(void)
 
 	DefineCustomIntVariable("anser.max_info_size",
 							"Sets the maximum byte size of one Anser information record.",
-							"Per-record DSM payload cap for Anser information.  The default holds a full 64 MB bloom-filter bitset plus its serialized-part header.",
+							"Caps the serialized payload a channel may carry, and with it the effective bloom-filter size.  The default holds a full 64 MB bitset plus its serialized-part header.",
 							&gp_anser_max_info_size,
 							64 * 1024 * 1024 + 1024 * 1024, 1, INT_MAX,
-							PGC_POSTMASTER,
+							PGC_USERSET,
 							0,
 							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("anser.timeout_ms",
-							"Sets how long Anser consumers wait for producer registration.",
-							"After producer registration, consumers wait for data without this timeout and rely on query cancellation or channel cancellation.",
+							"Sets how long an Anser consumer waits for its filter.",
+							"On expiry the consumer runs unfiltered.  The deadline matters because a producer that gets squelched never publishes at all.",
 							&gp_anser_timeout_ms,
 							1000, 0, INT_MAX,
 							PGC_USERSET,

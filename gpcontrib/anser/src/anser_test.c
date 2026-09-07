@@ -288,12 +288,12 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	key.gp_session_id = gp_session_id;
 	key.gp_command_count = gp_command_count;
 	key.condition_id = 77;
-	strlcpy(key.condition_key, "sideband_roundtrip", ANSER_CONDITION_KEY_SIZE);
+	strlcpy(key.condition_key, "node_roundtrip", ANSER_CONDITION_KEY_SIZE);
 
 	PG_TRY();
 	{
-		producer = ExecInitAnserBloomFilterProduce(&key, 32, 1024 * 1024, 0, 1,
-												   NULL);
+		producer = ExecInitAnserBloomFilterProduce(&key, ANSER_TEST_ELEMS,
+												   ANSER_TEST_MAX_PAYLOAD, 0, 1);
 		if (producer == NULL)
 			ok = false;
 		else
@@ -305,8 +305,8 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 
 		if (ok)
 		{
-			consumer = ExecInitAnserBloomFilterConsume(&key, 32, 1024 * 1024, 1,
-													   NULL);
+			consumer = ExecInitAnserBloomFilterConsume(&key, ANSER_TEST_ELEMS,
+													   ANSER_TEST_MAX_PAYLOAD, 1);
 			if (consumer == NULL)
 				ok = false;
 			else
